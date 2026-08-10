@@ -84,12 +84,21 @@ jobs:
           fi
 
       # Upstream ships many CI workflows; keep only Docker + this sync job enabled.
-      - name: Disable non-allowlisted workflows
+      - name: Strip Dependabot + disable non-allowlisted workflows
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          git checkout anyroute
+          git reset --hard origin/anyroute
+
+          if [ -f .github/dependabot.yml ]; then
+            git rm -f .github/dependabot.yml
+            git commit -m "ci: remove Dependabot config after upstream sync"
+            git push origin anyroute
+          fi
+
           KEEP_REGEX='^(Build and Push Anyroute Docker Image|Sync upstream default branch)$'
           while IFS=$'\t' read -r name id state; do
             if printf '%s' "$name" | grep -Eq "$KEEP_REGEX"; then
@@ -98,7 +107,7 @@ jobs:
             fi
             if [ "$state" = "active" ]; then
               echo "DISABLE $name"
-              gh workflow disable "$id" --repo "$REPO"
+              gh workflow disable "$id" --repo "$REPO" || true
             else
               echo "already disabled: $name"
             fi
