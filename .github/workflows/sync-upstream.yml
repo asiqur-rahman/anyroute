@@ -4,7 +4,8 @@ name: Sync upstream default branch
 # Does NOT merge into `anyroute` — you merge main → anyroute yourself when ready.
 on:
   schedule:
-    - cron: "0 */6 * * *"
+    # Once per day at 00:00 UTC
+    - cron: "0 0 * * *"
   workflow_dispatch:
 
 permissions:
