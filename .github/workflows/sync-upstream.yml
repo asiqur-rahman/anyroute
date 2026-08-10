@@ -1,7 +1,7 @@
 name: Sync upstream default branch
 
-# Dynamically tracks diegosouzapw/OmniRoute's current default branch
-# (latest release/vX.Y.Z) and merges it into `anyroute`.
+# Mirrors diegosouzapw/OmniRoute's *current* default branch onto `main`.
+# Does NOT merge into `anyroute` — you merge main → anyroute yourself when ready.
 on:
   schedule:
     - cron: "0 */6 * * *"
@@ -52,53 +52,36 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "Upstream default: ${DEFAULT_BRANCH} @ ${SHORT}"
 
-      - name: Merge upstream default into anyroute
-        id: merge
+      - name: Update main (upstream mirror only)
+        id: mirror
         env:
           UPSTREAM_BRANCH: ${{ steps.upstream.outputs.branch }}
           UPSTREAM_SHA: ${{ steps.upstream.outputs.sha }}
         run: |
           set -euo pipefail
-          git checkout anyroute
-          git reset --hard origin/anyroute
-
-          BEFORE=$(git rev-parse HEAD)
-          if git merge-base --is-ancestor "$UPSTREAM_SHA" HEAD; then
-            echo "anyroute already contains upstream/${UPSTREAM_BRANCH} — nothing to merge"
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            exit 0
+          BEFORE=""
+          if git ls-remote --exit-code --heads origin main >/dev/null 2>&1; then
+            BEFORE=$(git rev-parse origin/main)
           fi
 
-          if ! git merge --no-edit "$UPSTREAM_SHA"; then
-            echo "::error::Merge conflict while syncing upstream/${UPSTREAM_BRANCH} into anyroute. Resolve manually."
-            git merge --abort || true
-            exit 1
-          fi
+          git checkout -B main "$UPSTREAM_SHA"
+          git push --force origin main
 
           AFTER=$(git rev-parse HEAD)
           if [ "$BEFORE" = "$AFTER" ]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
-            git push origin anyroute
           fi
+          echo "main now mirrors upstream/${UPSTREAM_BRANCH} @ $(git rev-parse --short HEAD)"
 
-      # Upstream ships many CI workflows; keep only Docker + this sync job enabled.
-      - name: Strip Dependabot + disable non-allowlisted workflows
+      # Keep only Docker + this sync job enabled (anyroute is the default branch).
+      - name: Disable non-allowlisted workflows
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          git checkout anyroute
-          git reset --hard origin/anyroute
-
-          if [ -f .github/dependabot.yml ]; then
-            git rm -f .github/dependabot.yml
-            git commit -m "ci: remove Dependabot config after upstream sync"
-            git push origin anyroute
-          fi
-
           KEEP_REGEX='^(Build and Push Anyroute Docker Image|Sync upstream default branch)$'
           while IFS=$'\t' read -r name id state; do
             if printf '%s' "$name" | grep -Eq "$KEEP_REGEX"; then
@@ -118,13 +101,13 @@ jobs:
         env:
           UPSTREAM_BRANCH: ${{ steps.upstream.outputs.branch }}
           UPSTREAM_SHORT: ${{ steps.upstream.outputs.short }}
-          CHANGED: ${{ steps.merge.outputs.changed }}
+          CHANGED: ${{ steps.mirror.outputs.changed }}
         run: |
           {
             echo "## Upstream sync"
             echo ""
             echo "- Upstream default branch: \`${UPSTREAM_BRANCH}\`"
             echo "- Upstream tip: \`${UPSTREAM_SHORT}\`"
-            echo "- Merged into \`anyroute\`: \`${CHANGED:-false}\`"
-            echo "- Non-allowlisted workflows re-disabled"
+            echo "- \`main\` mirror updated: \`${CHANGED:-false}\`"
+            echo "- \`anyroute\` was **not** merged (do that manually when ready)"
           } >> "$GITHUB_STEP_SUMMARY"
