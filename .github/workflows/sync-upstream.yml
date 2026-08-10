@@ -1,0 +1,112 @@
+name: Sync upstream default branch
+
+# Keeps this repo dynamic like a living fork:
+# - Resolves diegosouzapw/OmniRoute's *current* default branch (e.g. release/v3.8.50)
+# - Force-updates `main` to match it exactly (upstream unmodified)
+# - Merges that tip into `anyroute` (preserves your fork commits, e.g. Docker workflow)
+on:
+  schedule:
+    # Check every 6 hours for a new upstream default / new commits
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: anyroute
+          # Needed so later pushes can update protected/default branches with GITHUB_TOKEN
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/diegosouzapw/OmniRoute.git
+          git fetch upstream --prune
+
+      - name: Resolve upstream default branch
+        id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          DEFAULT_BRANCH=$(gh api repos/diegosouzapw/OmniRoute --jq .default_branch)
+          SHA=$(git rev-parse "upstream/${DEFAULT_BRANCH}")
+          SHORT=$(git rev-parse --short "upstream/${DEFAULT_BRANCH}")
+          {
+            echo "branch=${DEFAULT_BRANCH}"
+            echo "sha=${SHA}"
+            echo "short=${SHORT}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Upstream default: ${DEFAULT_BRANCH} @ ${SHORT}"
+
+      - name: Update main (exact upstream mirror)
+        env:
+          UPSTREAM_BRANCH: ${{ steps.upstream.outputs.branch }}
+        run: |
+          set -euo pipefail
+          git checkout -B main "upstream/${UPSTREAM_BRANCH}"
+          git push --force origin main
+          # Also publish the concrete upstream branch name for visibility
+          git push --force origin "refs/remotes/upstream/${UPSTREAM_BRANCH}:refs/heads/${UPSTREAM_BRANCH}"
+
+      - name: Merge upstream into anyroute
+        id: merge
+        env:
+          UPSTREAM_BRANCH: ${{ steps.upstream.outputs.branch }}
+          UPSTREAM_SHA: ${{ steps.upstream.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git checkout anyroute
+          git reset --hard origin/anyroute
+
+          BEFORE=$(git rev-parse HEAD)
+          if git merge-base --is-ancestor "$UPSTREAM_SHA" HEAD; then
+            echo "anyroute already contains upstream/${UPSTREAM_BRANCH} — nothing to merge"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ! git merge --no-edit main; then
+            echo "::error::Merge conflict while syncing upstream/${UPSTREAM_BRANCH} into anyroute. Resolve manually."
+            git merge --abort || true
+            exit 1
+          fi
+
+          AFTER=$(git rev-parse HEAD)
+          if [ "$BEFORE" = "$AFTER" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git push origin anyroute
+          fi
+
+      - name: Summary
+        env:
+          UPSTREAM_BRANCH: ${{ steps.upstream.outputs.branch }}
+          UPSTREAM_SHORT: ${{ steps.upstream.outputs.short }}
+          CHANGED: ${{ steps.merge.outputs.changed }}
+        run: |
+          {
+            echo "## Upstream sync"
+            echo ""
+            echo "- Upstream default branch: \`${UPSTREAM_BRANCH}\`"
+            echo "- Upstream tip: \`${UPSTREAM_SHORT}\`"
+            echo "- \`main\` updated to match upstream"
+            echo "- \`anyroute\` merge changed: \`${CHANGED:-false}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
