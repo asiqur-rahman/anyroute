@@ -9,10 +9,20 @@ on:
 env:
   IMAGE: asiqurrahman/anyroute
 
+permissions:
+  contents: read
+  actions: write
+
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
     steps:
+      - name: Free disk space
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -29,7 +39,8 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # amd64 only — same fast default as nirman's production push workflow.
+      # Cap the Node build heap below the Dockerfile default (4096) so the
+      # standard GitHub runner (~7 GB) is not OOM-killed mid-build.
       - name: Build + push anyroute
         uses: docker/build-push-action@v6
         with:
@@ -38,6 +49,11 @@ jobs:
           target: runner-base
           platforms: linux/amd64
           push: true
+          provenance: false
+          build-args: |
+            OMNIROUTE_BUILD_MEMORY_MB=3072
+          cache-from: type=gha,scope=anyroute-amd64
+          cache-to: type=gha,scope=anyroute-amd64,mode=max
           tags: |
             ${{ env.IMAGE }}:latest
             ${{ env.IMAGE }}:sha-${{ steps.sha.outputs.short }}
