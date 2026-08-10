@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: sync-upstream
@@ -82,6 +83,28 @@ jobs:
             git push origin anyroute
           fi
 
+      # Upstream ships many CI workflows; keep only Docker + this sync job enabled.
+      - name: Disable non-allowlisted workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          KEEP_REGEX='^(Build and Push Anyroute Docker Image|Sync upstream default branch)$'
+          while IFS=$'\t' read -r name id state; do
+            if printf '%s' "$name" | grep -Eq "$KEEP_REGEX"; then
+              echo "KEEP  $name"
+              continue
+            fi
+            if [ "$state" = "active" ]; then
+              echo "DISABLE $name"
+              gh workflow disable "$id" --repo "$REPO"
+            else
+              echo "already disabled: $name"
+            fi
+          done < <(gh workflow list --repo "$REPO" --json name,id,state \
+            --jq '.[] | [.name, (.id|tostring), .state] | @tsv')
+
       - name: Summary
         env:
           UPSTREAM_BRANCH: ${{ steps.upstream.outputs.branch }}
@@ -94,4 +117,5 @@ jobs:
             echo "- Upstream default branch: \`${UPSTREAM_BRANCH}\`"
             echo "- Upstream tip: \`${UPSTREAM_SHORT}\`"
             echo "- Merged into \`anyroute\`: \`${CHANGED:-false}\`"
+            echo "- Non-allowlisted workflows re-disabled"
           } >> "$GITHUB_STEP_SUMMARY"
